@@ -215,14 +215,6 @@ void loop() {
 
   delay(10);
 
-  // if(u > u_last - 50){
-  //   u = u_last + 50;
-  // }
-  // u_last = u;
-
-  // Write to the output pins
-  // digitalWrite(M1, LOW);  // Drive forward (left wheels)
-  // analogWrite(E1, u);     // Write left motors command
 }
 
 float readEncoder() {
