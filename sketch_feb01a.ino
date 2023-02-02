@@ -191,11 +191,6 @@ void loop() {
     omega_y -= dgy;
     omega_z -= dgz;
 
-    // Print the gyroscope measurements to the Serial Monitor
-    //   Serial.print("Estimated turning speed (gyro): ");
-    // Serial.print(omega_z/180*2*PI);
-    // Serial.print(" rad/s");
-    // Serial.print("\n");
   }
   // }
 
@@ -239,15 +234,3 @@ float readGyro() {
 short P_controller(double k, double v_d, double v_m) {
   return k * (v_d - v_m);
 }
-
-// Wheel speed PI controller function
-//short PI_controller(double e_now, i_term, k) {
-//  short u;
-//  u = (short)(k * e_now + i_term);
-//  if (u > 255) {
-//    u = 255;
-//  } else if (u < -255) {
-//    u = -255;
-//  }
-//  return u;
-//}
