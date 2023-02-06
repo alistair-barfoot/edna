@@ -37,11 +37,11 @@ const byte M1 = 7;
 byte u = 0;
 
 // Left wheel encoder digital pins
-const byte SIGNAL_A = 13;
-const byte SIGNAL_B = 12;
+const byte SIGNAL_A = 7;
+const byte SIGNAL_B = 6;
 
-const byte SIGNAL_AR = 11;
-const byte SIGNAL_BR = 10;
+const byte SIGNAL_AR = 5;
+const byte SIGNAL_BR = 4;
 
 float k = 200;
 float u_ms, u_last = 0.0;
@@ -60,6 +60,9 @@ const double l = 0.2775;
 // Counter to keep track of encoder ticks [integer]
 volatile long encoder_ticks = 0;
 volatile long encoder_ticks_r = 0;
+
+long encoder_ticks_last = 0;
+long encoder_ticks_last_r = 0;
 
 // Variable to store estimated angular rate of left wheel [rad/s]
 double omega_L = 0.0;
@@ -149,19 +152,30 @@ void loop() {
 
   // if (t_now - t_last >= T) {
   // Estimate the rotational speed [rad/s]
+  
+  Serial.print("encoder_ticks=");
+  Serial.print(encoder_ticks);
+  Serial.print(", t_last=");
+  Serial.println(t_last);
+  // Serial.print(", vd=");
+  // Serial.print(v_d);
+  // Serial.print(", vL=");
+  // Serial.print(v_L);
+  // Serial.print(", u=");
+  // Serial.println(u);
+
+  if(t_now==t_last){
+    ++t_now;
+  }
+
   omega_L = -2.0 * PI * ((double)encoder_ticks / (double)TPR) * 1000.0 / (double)(t_now - t_last);
   omega_R = 2.0 * PI * ((double)encoder_ticks_r / (double)TPR) * 1000.0 / (double)(t_now - t_last);
 
   v_L = RHO * omega_L;
-  v_R = RHO * omega_R;
+  // v_L = 0.2;
+  // v_R = RHO * omega_R;
   omega = (v_R - v_L) / l;
   v = .5 * (v_L + v_R);
-
-  // Serial.print("Estimated turning speed (encoder): ");
-  // Serial.print(omega);
-  // Serial.print(" rad/s");
-  // Serial.print("\n");
-
 
   // Record the current time [ms]
   t_last = t_now;
@@ -180,9 +194,6 @@ void loop() {
     a_last = a_x;
     t_last_a = t_now;
 
-// current time = t_now, last time = t_last
-// current acc = a_x, last acc = ???    
-
   }
 
   if (IMU.gyroscopeAvailable()) {
@@ -195,14 +206,23 @@ void loop() {
   // }
 
   // Set the wheel motor PWM command [0-255]
-  i_term += k_cof*(v_d - v_a);
-  u_ms = k * (v_d - v_a) + i_term;
+  i_term += k_cof*(v_d - v_L);
+  u_ms = k * (v_d - v_L) + i_term;
   u = u_ms * 318.75 * v_d;
 
   if (u > 255) u = 255;
   if (u < -255) u = -255;
-  Serial.print("u=");
-  Serial.println(u);
+
+  // Serial.print("i_term:");
+  // Serial.print(i_term);
+  // Serial.print(", u_ms=");
+  // Serial.print(u_ms);
+  // Serial.print(", vd=");
+  // Serial.print(v_d);
+  // Serial.print(", vL=");
+  // Serial.print(v_L);
+  // Serial.print(", u=");
+  // Serial.println(u);
 
 
   digitalWrite(I1, HIGH);
@@ -210,8 +230,8 @@ void loop() {
   digitalWrite(I3, LOW);
   digitalWrite(I4, HIGH);
 
-  analogWrite(EA, u);
-  analogWrite(EB, u);
+  // analogWrite(EA, u); // right wheel
+  analogWrite(EB, u); // left wheel
 
   delay(10);
 
