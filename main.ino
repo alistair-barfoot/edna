@@ -197,7 +197,7 @@ void loop() {
   // Set the wheel motor PWM command [0-255]
   i_term += k_cof*(v_d - v_a);
   u_ms = k * (v_d - v_a) + i_term;
-  u = u_ms * 318.75 * v_d;
+  u = u_ms * 318.75 * v_d;        // for calculating error make sure we only calculate when -255 < u < 255
 
   if (u > 255) u = 255;
   if (u < -255) u = -255;
