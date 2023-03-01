@@ -43,13 +43,6 @@ const byte SIGNAL_B = 12;
 const byte SIGNAL_AR = 11;
 const byte SIGNAL_BR = 10;
 
-float k = 200;
-float u_ms, u_last = 0.0;
-float v_d = 0.5;
-float v_a = 0;
-float i_term = 0;
-float k_cof = k/2;
-
 // Encoder ticks per (motor) revolution (TPR)
 const int TPR = 3000;
 
@@ -68,6 +61,9 @@ double omega_R = 0.0;
 double v_R = 0.0;
 double omega = 0.0;
 double v = 0.0;
+float v_a = 0;
+float i_term_f = 0;
+float i_term_turn = 0;
 
 // Sampling interval for measurements in milliseconds
 const int T = 200;
@@ -152,17 +148,6 @@ void loop() {
   omega_L = -2.0 * PI * ((double)encoder_ticks / (double)TPR) * 1000.0 / (double)(t_now - t_last);
   omega_R = 2.0 * PI * ((double)encoder_ticks_r / (double)TPR) * 1000.0 / (double)(t_now - t_last);
 
-  v_L = RHO * omega_L;
-  v_R = RHO * omega_R;
-  omega = (v_R - v_L) / l;
-  v = .5 * (v_L + v_R);
-
-  // Serial.print("Estimated turning speed (encoder): ");
-  // Serial.print(omega);
-  // Serial.print(" rad/s");
-  // Serial.print("\n");
-
-
   // Record the current time [ms]
   t_last = t_now;
 
@@ -193,10 +178,56 @@ void loop() {
 
   }
   // }
+  driveForwards(0.3);
+  turnSeq(true, 0.5);
+
+
+  delay(10);
+
+}
+
+void turnSeq(bool left, float v_d){
+  v_L = RHO * omega_L;
+  v_R = RHO * omega_R;
+  omega = (v_R - v_L) / l;
+
+  float k = 200;
+  float u_rads = 0.0;
+
+  u_rads = k * (v_d - omega);
+  u = u_rads * 318.75 * v_d;
+  
+  if (u > 255) u = 255;
+  if (u < -255) u = -255;
+  Serial.print("u=");
+  Serial.println(u);
+
+  if(left == true){
+    digitalWrite(I1, HIGH);
+    digitalWrite(I2, LOW);
+    digitalWrite(I3, HIGH);
+    digitalWrite(I4, LOW);
+  }
+  if(left == false){
+    digitalWrite(I1, LOW);
+    digitalWrite(I2, HIGH);
+    digitalWrite(I3, LOW);
+    digitalWrite(I4, HIGH);
+  }
+
+  analogWrite(EA, u);
+  analogWrite(EB, u);
+
+}
+
+void driveForwards(float v_d){
+  float k = 200;
+  float u_ms = 0.0;
+  float k_cof = k/2;
 
   // Set the wheel motor PWM command [0-255]
-  i_term += k_cof*(v_d - v_a);
-  u_ms = k * (v_d - v_a) + i_term;
+  i_term_f += k_cof*(v_d - v_a);
+  u_ms = k * (v_d - v_a) + i_term_f;
   u = u_ms * 318.75 * v_d;
 
   if (u > 255) u = 255;
@@ -212,15 +243,6 @@ void loop() {
 
   analogWrite(EA, u);
   analogWrite(EB, u);
-
-  delay(10);
-
-}
-
-float readEncoder() {
-}
-
-float readGyro() {
 }
 
 short P_controller(double k, double v_d, double v_m) {
