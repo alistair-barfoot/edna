@@ -1,0 +1,569 @@
+/**
+
+  @file speed-controller.ino
+
+  @author Joshua Marshall (joshua.marshall@queensu.ca), Thomas Sears (thomas.sears@queensu.ca)
+
+  @brief Arduino program to control the speed and turning rate of a vehicle.
+
+  @version 2.2
+
+  @date 2022-12-17
+
+  Main version integrated with Lights, drive code, and buzzer
+  From clairey ferguson heart emoji
+
+
+  @copyright Copyright (c) 2023
+*/
+
+
+/* PIN CONNECTIONS */
+
+#include <Adafruit_NeoPixel.h>
+#include <Adafruit_SGP30.h>
+#include <SPI.h>
+
+
+//Nanopixel setup
+#define PIN            1
+#define PIN2           0
+
+#define NUMPIXELS      8
+Adafruit_NeoPixel pixels = Adafruit_NeoPixel(NUMPIXELS, PIN, NEO_GRBW + NEO_KHZ800);
+Adafruit_NeoPixel pixels2 = Adafruit_NeoPixel(NUMPIXELS, PIN2, NEO_GRBW + NEO_KHZ800);
+
+Adafruit_SGP30 sgp;
+
+// Left wheel PWM control
+
+int EB = 9; // Wheel PWM pin (must be a PWM pin)
+int I3 = 13; // Wheel direction digital pin 1
+int I4 = 12; // Wheel direction digital pin 2
+
+// Right wheel PWM control
+
+int EA = 11; // Wheel PWM pin (must be a PWM pin)
+int I1 = 8; // Wheel direction digital pin 1
+int I2 = 7; // Wheel direction digital pin 2
+
+
+// Left wheel encoder digital pins
+
+const byte SIGNAL_AL = 3; // green wire
+const byte SIGNAL_BL = 4; // yellow wire
+
+// Right wheel encoder digital pins
+
+const byte SIGNAL_AR = 5;  // green wire
+const byte SIGNAL_BR = 6; // yellow wire
+
+/* USEFUL CONSTANTS */
+
+// Encoder ticks per (motor) revolution (TPR)
+const int TPR = 3000;
+
+// Wheel radius [m]
+const double RHO = 0.0625;
+
+// Vehicle track [m]
+const double ELL = 0.2775;
+
+// Sampling interval for measurements in milliseconds
+const int T = 100;
+
+// Controller gains (use the same values for both wheels)
+
+const double KP = 200.0; // Proportional gain
+const double KI = 100.0; // Integral gain
+
+//Beeper Pins
+
+#define audio 10
+
+const byte SHARP_PIN_L = A0; // left sensor
+const byte SHARP_PIN_R = A1;  // right sensor
+const byte SHARP_PIN_F = A2;  // front sensor
+const byte speaker = 10;
+
+// Variables to store the proximity measurement
+int sharp_val_L = 0; // integer read from analog pin
+int sharp_val_R = 0; // integer read from analog pin
+int sharp_val_F = 0; // integer read from analog pin
+
+float sharp_range_L; // range measurement [cm]
+float sharp_range_R; // range measurement [cm]
+float sharp_range_F; // range measurement [cm]
+
+int Distance_L; // left distance [cm]
+int Distance_R; // right distance [cm]
+int Distance_F; // front distance [cm]
+
+int countF = 0;
+int countL = 0;
+int countR = 0;
+
+
+/* VARIABLE DECLARATIONS */
+
+// Motor PWM command variables [0-255]
+short u_L = 0;
+short u_R = 0;
+
+// Counter to keep track of encoder ticks [integer]
+volatile long encoder_ticks_L = 0;
+volatile long encoder_ticks_R = 0;
+
+
+// Variables to store estimated angular rates of wheels [rad/s]
+double omega_L = 0.0;
+double omega_R = 0.0;
+
+// Variables to store estimated wheel speeds [m/s]
+double v_L = 0.0;
+double v_R = 0.0;
+
+// Variables to store vehicle speed and turning rate
+double v = 0.0;     // [m/s]
+double omega = 0.0; // [rad/s]
+
+// Variables to store desired vehicle speed and turning rate
+double v_d = 0.0;     // [m/s]
+double omega_d = 0.0; // [rad/s]
+
+// Variable to store desired wheel speeds [m/s]
+double v_Ld = 0.0;
+double v_Rd = 0.0;
+
+// Counters for milliseconds during interval
+long t_now = 0;
+long t_last = 0;
+
+// Variables to store errors for controller
+double e_L = 0.0;
+double e_R = 0.0;
+double e_Lint = 0.0;
+double e_Rint = 0.0;
+
+/* HELPER FUNCTIONS */
+
+// This function applies PWM inputs (u_L and u_R) to the right and left wheels
+void driveVehicle(short u_L, short u_R){
+
+  // LEFT WHEEL
+
+  if (u_L < 0){
+  // If the controller calculated a negative input...
+    digitalWrite(I3, HIGH); // Drive backward (left wheels)
+    digitalWrite(I4, LOW);  // Drive backward (left wheels)
+
+    analogWrite(EB, -u_L); // Write left motors command
+  }
+
+  else {
+    
+  // the controller calculated a positive input
+    digitalWrite(I3, LOW);  // Drive forward (left wheels)
+    digitalWrite(I4, HIGH); // Drive forward (left wheels)
+
+    analogWrite(EB, u_L); // Write left motors command
+  }
+
+
+  // RIGHT WHEEL
+
+  if (u_R < 0){
+    
+  // If the controller calculated a negative input...
+    digitalWrite(I1, LOW);  // Drive backward (right wheels)
+    digitalWrite(I2, HIGH); // Drive backward (right wheels)
+
+    analogWrite(EA, -u_R); // Write right motors command
+  }
+
+  else{
+  // the controller calculated a positive input
+    digitalWrite(I1, HIGH); // Drive forward (right wheels)
+    digitalWrite(I2, LOW);  // Drive forward (right wheels)
+
+    analogWrite(EA, u_R); // Write right motors command
+  }
+}
+
+
+
+// This function is called when SIGNAL_AL (left encoder) goes HIGH
+void decodeEncoderTicks_L(){
+
+  if (digitalRead(SIGNAL_BL) == LOW){
+    // SIGNAL_A leads SIGNAL_B, so count one way
+    encoder_ticks_L--;
+  }
+
+  else{
+    // SIGNAL_B leads SIGNAL_A, so count the other way
+    encoder_ticks_L++;
+  }
+}
+
+
+// This function is called when SIGNAL_AR (right encoder) goes HIGH
+void decodeEncoderTicks_R(){
+ 
+  if (digitalRead(SIGNAL_BR) == LOW){
+    
+    // SIGNAL_A leads SIGNAL_B, so count one way
+    encoder_ticks_R++;
+  }
+  else{
+    
+   // SIGNAL_B leads SIGNAL_A, so count the other way
+    encoder_ticks_R--;
+  }
+}
+
+// Compute the wheel rate from elapsed time and encoder ticks [rad/s]
+double compute_wheel_rate(long encoder_ticks, double delta_t){
+
+  double omega;
+  omega = 2.0 * PI * ((double)encoder_ticks / (double)TPR) * 1000.0 / delta_t;
+
+  return omega;
+}
+
+// Compute wheel speed [m/s]
+double compute_wheel_speed(double omega_wheel){
+
+  double v_wheel;
+  v_wheel = omega_wheel * RHO;
+  return v_wheel;
+}
+
+// Compute vehicle speed [m/s]
+double compute_vehicle_speed(double v_L, double v_R){
+
+  double v;
+  v = 0.5 * (v_L + v_R);
+  return v;
+}
+
+// Compute vehicle turning rate [rad/s]
+double compute_vehicle_rate(double v_L, double v_R){
+
+  double omega;
+  omega = 1.0 / ELL * (v_R - v_L);
+  return omega;
+}
+
+// Compute v_L from v and omega
+double compute_L_wheel_speed(double v, double omega){
+
+  double v_wheel = 0.0;
+  v_wheel = v - ELL / 2.0 * omega;
+  return v_wheel;
+
+}
+
+// Compute v_R from v and omega
+double compute_R_wheel_speed(double v, double omega){
+
+  double v_wheel = 0.0;
+  v_wheel = v + ELL / 2.0 * omega;
+
+  return v_wheel;
+
+}
+
+// Wheel speed PI controller function
+short PI_controller(double e_now, double e_int, double k_P, double k_I){
+
+  short u;
+  u = (short)(k_P * e_now + k_I * e_int);
+
+  // Saturation (i.e., maximum input) detection
+  if (u > 255){
+    u = 255;
+  }
+
+  else if (u < -255){
+    u = -255;
+  }
+
+  return u;
+}
+
+
+
+uint32_t getAbsoluteHumidity(float temperature, float humidity);
+
+/* SETUP FUNCTION */
+
+void setup()
+{
+
+  // Open the serial port at 9600 bps
+  Serial.begin(115200);
+
+  
+  //lights setup
+  pixels.begin();
+  pixels.show();
+  pixels.setBrightness(5);
+  pixels.clear();
+
+  pixels2.begin();
+  pixels2.show();
+  pixels2.setBrightness(5);
+  pixels2.clear();
+
+  // Configure digital pins for output
+
+  pinMode(EA, OUTPUT);
+  pinMode(I1, OUTPUT);
+  pinMode(I2, OUTPUT);
+
+  // Configure digital pins for output
+
+  pinMode(EB, OUTPUT);
+  pinMode(I3, OUTPUT);
+  pinMode(I4, OUTPUT);
+
+  // Set the pin modes for the encoders
+
+  pinMode(SIGNAL_AL, INPUT);
+  pinMode(SIGNAL_BL, INPUT);
+  pinMode(SIGNAL_AR, INPUT);
+  pinMode(SIGNAL_BR, INPUT);
+
+  // Send 0 PWM commands
+
+  analogWrite(EA, 0);
+  analogWrite(EB, 0);
+
+  // Send brake signals to motor driver
+
+  digitalWrite(I1, LOW);
+  digitalWrite(I2, LOW);
+  digitalWrite(I3, LOW);
+  digitalWrite(I4, LOW);
+
+  pinMode(audio, OUTPUT);
+
+  if (!sgp.begin())
+    {
+        Serial.println("Sensor not found :(");
+        while (1)
+        {
+            delay(10); // This will stay here forever if a sensor isn't found
+        }
+    }
+
+  // Every time the pin goes high, this is a pulse; enable the interrupts
+
+  attachInterrupt(digitalPinToInterrupt(SIGNAL_AL), decodeEncoderTicks_L, RISING);
+  attachInterrupt(digitalPinToInterrupt(SIGNAL_AR), decodeEncoderTicks_R, RISING);
+
+  delay(1000);
+
+  // Print a message
+
+  Serial.print("Program initialized.");
+  Serial.print("\n");
+
+}
+
+
+int counter = 0;
+unsigned long period = 100; // Measurement period [ms]
+unsigned long measurement_time = millis();
+
+
+/* MAIN PROGRAM LOOP */
+
+void loop(){
+
+  for(int i=0;i<NUMPIXELS;i++){
+        
+        float x = ((sgp.eCO2)-400)/1200.0;
+        
+        if(x >= 1.0){
+          x = 1.0;
+        }
+       
+        
+        int r = 255.0*x;
+        int g = 255.0*(1-x);
+        
+        
+        
+        // pixels.Color takes RGB values, from 0,0,0 up to 255,255,255
+        pixels.setPixelColor(i, pixels.Color(r,g,0,0));
+        pixels2.setPixelColor(i, pixels2.Color(r,g,0,0)); 
+
+        pixels.show(); // This sends the updated pixel color to the hardware.
+        pixels2.show(); // This sends the updated pixel color to the hardware.
+      }
+
+      if (millis() - measurement_time > period){
+        measurement_time = millis();
+        sgp.IAQmeasure();
+              
+    }
+
+
+  // Get the elapsed time [ms]
+  t_now = millis();
+
+  // Perform control update every T milliseconds
+  if (t_now - t_last >= T){
+
+    // Set the desired vehicle speed and turning rate
+    v_d = 0.2;     // [m/s]
+    omega_d = 0.0; // [rad/s]
+
+    // Estimate the rotational speed of each wheel [rad/s]
+    omega_L = compute_wheel_rate(encoder_ticks_L, (double)(t_now - t_last));
+    omega_R = compute_wheel_rate(encoder_ticks_R, (double)(t_now - t_last));
+    
+
+    // Compute the speed of each wheel [m/s]
+    v_L = compute_wheel_speed(omega_L);
+    v_R = compute_wheel_speed(omega_R);
+    
+
+    // Compute the speed of the vehicle [m/s]
+    v = compute_vehicle_speed(v_L, v_R);
+    
+
+    // Compute the turning rate of the vehicle [rad/s]
+    omega = compute_vehicle_rate(v_L, v_R);
+    
+
+    // Record the current time [ms]
+    t_last = t_now;
+    
+
+    // Reset the encoder ticks counter
+    encoder_ticks_L = 0;
+    encoder_ticks_R = 0;
+
+
+    // Compute the desired wheel speeds from v_d and omega_d
+    v_Ld = compute_L_wheel_speed(v_d, omega_d);
+    v_Rd = compute_R_wheel_speed(v_d, omega_d);
+
+
+    // Compute errors
+    e_L = v_Ld - v_L;
+    e_R = v_Rd - v_R;
+
+
+    // Integrate errors with anti-windup
+    if (abs(u_L) < 255){
+
+      e_Lint += e_L;
+    }
+
+    if (abs(u_R) < 255){
+
+      e_Rint += e_R;
+    }
+
+    // Compute control signals using PI controller
+    u_L = PI_controller(e_L, e_Lint, KP, KI);
+    u_R = PI_controller(e_R, e_Rint, KP, KI);
+
+    // Read the sensor output (0-1023, which is 10 bits and fits inside an Arduino int-type)
+    sharp_val_F = analogRead(SHARP_PIN_F);
+    int voltage = map(sharp_val_F,0,1023,0,3300); // taken from FY code (ty brian surgenor)Analog val to Voltage
+
+    if(voltage > 900){
+      countF++;
+      if(countF > 5){
+        digitalWrite(audio, HIGH);
+         analogWrite(EA, 0);
+         analogWrite(EB, 0);
+
+      }
+      Serial.println("F  ");
+       
+      Distance_F = (voltage - 1300)*-10/(1300 - 920) + 10;
+      // 20-30
+      
+    }else{
+      
+     // Drive the vehicle
+     
+      driveVehicle(u_L, u_R);
+      countF = 0;
+     
+    }
+//-----------------------------------------------------------------------------------
+
+    // Read the sensor output (0-1023, which is 10 bits and fits inside an Arduino int-type)
+    sharp_val_R = analogRead(SHARP_PIN_R);
+    int voltage_R = map(sharp_val_R,0,1023,0,3300); // taken from FY code (ty brian surgenor)Analog val to Voltage
+
+    
+    if(voltage_R > 900){
+      countR++;
+      if(countR > 5){
+        digitalWrite(audio, HIGH);
+      }
+      Serial.println("R  ");
+      Distance_F = (voltage - 1300)*-10/(1300 - 920) + 10;
+      // 20-30
+    }else{
+      countR = 0;
+    }
+   
+
+//-----------------------------------------------------------------------------------//
+
+    // Read the sensor output (0-1023, which is 10 bits and fits inside an Arduino int-type)
+    sharp_val_L = analogRead(SHARP_PIN_L);
+    int voltage_L = map(sharp_val_L,0,1023,0,3300); // taken from FY code (ty brian surgenor)Analog val to Distance_F
+
+    
+    if(voltage_L > 900){
+      countL++;
+      if(countL > 5){
+        digitalWrite(audio, HIGH);
+      }
+      Serial.println("L");
+      Distance_F = (voltage - 1300)*-10/(1300 - 920) + 10;
+      
+      // 20-30
+    }else{
+      countL = 0;
+    }
+
+    if(countF == 0 && countL == 0 && countR == 0){
+      digitalWrite(audio, LOW);
+    }
+
+    // Print some stuff to the serial monitor (or plotter)
+    Serial.print("Vehicle_speed_[m/s]:");
+    Serial.print(v);
+    Serial.print(",");
+    Serial.print("Turning_rate_[rad/s]:");
+    Serial.print(omega);
+    Serial.print(",");
+    Serial.print("u_L:");
+    Serial.print(u_L);
+    Serial.print(",");
+    Serial.print("u_R:");
+    Serial.print(u_R);
+    Serial.print("\n");
+
+  }
+
+}
+
+uint32_t getAbsoluteHumidity(float temperature, float humidity){
+    // approximation formula from Sensirion SGP30 Driver Integration chapter 3.15
+    const float absoluteHumidity = 216.7f * ((humidity / 100.0f) * 6.112f * exp((17.62f * temperature) / (243.12f + temperature)) / (273.15f + temperature)); // [g/m^3]
+    const uint32_t absoluteHumidityScaled = static_cast<uint32_t>(1000.0f * absoluteHumidity);                                                                // [mg/m^3]
+
+    return absoluteHumidityScaled;
+}
